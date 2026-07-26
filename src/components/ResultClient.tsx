@@ -1,9 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { Question } from "@/lib/db";
 import { ArrowLeft, ArrowRight, CheckCircle2, RotateCcw, XCircle, Lightbulb } from "lucide-react";
 import { useLanguage } from "./LanguageProvider";
+
+type Question = {
+  id: string;
+  type?: 'mcq' | 'tf';
+  question: string;
+  option_a: string;
+  option_b: string;
+  option_c: string;
+  option_d: string;
+  correct_answer: string;
+  explanation?: string;
+};
 
 export default function ResultClient({
   result,

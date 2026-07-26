@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useLanguage } from "./LanguageProvider";
 import { saveResult } from "@/app/actions";
-import { CheckCircle2, ChevronLeft, AlertCircle } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, AlertCircle } from "lucide-react";
 
 type Question = {
   id: string;

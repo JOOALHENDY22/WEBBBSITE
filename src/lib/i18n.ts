@@ -144,8 +144,8 @@ export const dict: Dictionary = {
 };
 
 export function getT(lang: Language = "ar") {
-  return (key: keyof typeof dict, params?: Record<string, string | number>) => {
-    let text = dict[key]?.[lang] || key;
+  return (key: keyof typeof dict, params?: Record<string, string | number>): string => {
+    let text: string = dict[key]?.[lang] || (key as string);
     if (params) {
       Object.keys(params).forEach(p => {
         text = text.replace(`{${p}}`, String(params[p]));
