@@ -10,7 +10,7 @@ type Dictionary = {
 export const dict: Dictionary = {
   // Home
   platformTitle: { en: "Pharmacy Students Platform", ar: "منصة طلاب صيدلة" },
-  mainTitle: { en: "YMH Exams", ar: "امتحانات YMH" },
+  mainTitle: { en: "Mini Doctors", ar: "ميني دكتورز" },
   subtitle: { 
     en: "The ultimate testing platform designed exclusively for pharmacy students. Elevate your knowledge with interactive, real-time assessments.", 
     ar: "أجمد منصة امتحانات معمولة مخصوص لطلاب صيدلة. ظبط معلوماتك وامتحن في أي وقت وخد نتيجتك في ثواني!" 

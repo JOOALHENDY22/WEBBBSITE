@@ -1,6 +1,5 @@
-import { checkAdminSession, adminLogout } from "@/app/actions";
+import { checkAdminSession } from "@/app/actions";
 import AdminLogin from "@/components/AdminLogin";
-import AdminSidebar from "@/components/AdminSidebar";
 
 export const revalidate = 0; // Disable caching
 
@@ -16,11 +15,8 @@ export default async function AdminLayout({
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      <AdminSidebar />
-      <main className="flex-1 p-8">
-        {children}
-      </main>
+    <div className="min-h-screen bg-[#030712] w-full text-slate-200">
+      {children}
     </div>
   );
 }

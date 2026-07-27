@@ -17,8 +17,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "YMH Exams",
-  description: "Pharmacy Students Testing Platform",
+  title: "Mini Doctors - منصة طلاب الصيدلة",
+  description: "Mini Doctors - أجمد منصة امتحانات لطلاب كليات الصيدلة",
 };
 
 export default async function RootLayout({
@@ -35,7 +35,7 @@ export default async function RootLayout({
       dir={lang === "ar" ? "rtl" : "ltr"}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#09090b] text-slate-200 font-sans">
+      <body className="min-h-full flex flex-col bg-[#030712] text-slate-200 font-sans">
         <LanguageProvider initialLang={lang}>
           {children}
           <LanguageToggle />
