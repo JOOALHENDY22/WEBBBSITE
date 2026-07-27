@@ -25,12 +25,20 @@ let memoryDB: Database = {
 
 const DB_KEY = 'ymh_db';
 
+// Clean environment variables by stripping quotes if present (copy-paste protection)
+function cleanEnv(val: string | undefined): string {
+  if (!val) return '';
+  return val.trim().replace(/^["']|["']$/g, '');
+}
+
 // ─── Vercel KV (primary) ───────────────────────────────────────────────────────
 async function tryVercelKV(): Promise<{ get: () => Promise<Database | null>; set: (db: Database) => Promise<void> } | null> {
   try {
-    const kvUrl   = process.env.KV_REST_API_URL;
-    const kvToken = process.env.KV_REST_API_TOKEN;
+    const kvUrl   = cleanEnv(process.env.KV_REST_API_URL);
+    const kvToken = cleanEnv(process.env.KV_REST_API_TOKEN);
     if (!kvUrl || !kvToken) return null;
+
+    console.log(`[DB] Attempting Vercel KV connection to URL: ${kvUrl.slice(0, 30)}...`);
 
     return {
       async get() {
@@ -38,20 +46,31 @@ async function tryVercelKV(): Promise<{ get: () => Promise<Database | null>; set
           headers: { Authorization: `Bearer ${kvToken}` },
           cache: 'no-store'
         });
-        if (!res.ok) return null;
+        console.log(`[DB] Vercel KV GET status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`[DB] Vercel KV GET error details: ${text}`);
+          return null;
+        }
         const json = await res.json();
         if (!json.result) return null;
         return JSON.parse(json.result) as Database;
       },
       async set(db: Database) {
-        await fetch(`${kvUrl}/set/${DB_KEY}`, {
+        const res = await fetch(`${kvUrl}/set/${DB_KEY}`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${kvToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(JSON.stringify(db))
         });
+        console.log(`[DB] Vercel KV SET status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`[DB] Vercel KV SET error details: ${text}`);
+        }
       }
     };
-  } catch {
+  } catch (e: any) {
+    console.error('[DB] tryVercelKV setup error:', e.message);
     return null;
   }
 }
@@ -59,30 +78,52 @@ async function tryVercelKV(): Promise<{ get: () => Promise<Database | null>; set
 // ─── Upstash REST (secondary) ─────────────────────────────────────────────────
 async function tryUpstash(): Promise<{ get: () => Promise<Database | null>; set: (db: Database) => Promise<void> } | null> {
   try {
-    const url   = process.env.UPSTASH_REDIS_REST_URL;
-    const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+    const url   = cleanEnv(process.env.UPSTASH_REDIS_REST_URL);
+    const token = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN);
     if (!url || !token) return null;
+
+    console.log(`[DB] Attempting Upstash REST connection to URL: ${url.slice(0, 30)}...`);
 
     return {
       async get() {
-        const res = await fetch(`${url}/get/${DB_KEY}`, {
-          headers: { Authorization: `Bearer ${token}` },
+        // Standard REST fetch for Upstash Redis
+        const res = await fetch(`${url}/`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(['GET', DB_KEY]),
           cache: 'no-store'
         });
-        if (!res.ok) return null;
+        console.log(`[DB] Upstash REST GET status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`[DB] Upstash REST GET error details: ${text}`);
+          return null;
+        }
         const json = await res.json();
         if (!json.result) return null;
         return JSON.parse(json.result) as Database;
       },
       async set(db: Database) {
-        await fetch(`${url}/set/${DB_KEY}`, {
+        const res = await fetch(`${url}/`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(JSON.stringify(db))
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(['SET', DB_KEY, JSON.stringify(db)])
         });
+        console.log(`[DB] Upstash REST SET status: ${res.status}`);
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`[DB] Upstash REST SET error details: ${text}`);
+        }
       }
     };
-  } catch {
+  } catch (e: any) {
+    console.error('[DB] tryUpstash setup error:', e.message);
     return null;
   }
 }
@@ -97,20 +138,23 @@ export async function readDB(): Promise<Database> {
     const store = await getStore();
     if (store) {
       const data = await store.get();
-      if (data) return {
-        users:     data.users     || [],
-        exams:     data.exams     || [],
-        questions: data.questions || [],
-        results:   data.results   || []
-      };
-      // First run - initialize
+      if (data) {
+        console.log(`[DB] Successfully read data from remote database.`);
+        return {
+          users:     data.users     || [],
+          exams:     data.exams     || [],
+          questions: data.questions || [],
+          results:   data.results   || []
+        };
+      }
+      console.log(`[DB] Remote database is empty. Initializing with default schema...`);
       await store.set(defaultDB);
       return { ...defaultDB };
     }
   } catch (e) {
     console.error('[DB] readDB error:', e);
   }
-  // Fallback: in-memory (data won't persist across requests on Vercel)
+  console.warn('[DB] Falling back to in-memory store (volatile local memory only).');
   return memoryDB;
 }
 
@@ -119,12 +163,13 @@ export async function writeDB(db: Database): Promise<void> {
     const store = await getStore();
     if (store) {
       await store.set(db);
+      console.log(`[DB] Successfully wrote data to remote database.`);
       return;
     }
   } catch (e) {
     console.error('[DB] writeDB error:', e);
   }
-  // Fallback: in-memory
+  console.warn('[DB] Saved data locally in-memory only (will be lost on restart).');
   memoryDB = db;
 }
 
