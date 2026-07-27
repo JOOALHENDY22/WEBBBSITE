@@ -3,6 +3,7 @@
 import { readDB, writeDB, generateId } from "@/lib/db";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 
 // Simple deterministic hash (no Node.js crypto needed - works on all runtimes)
 function hashPassword(password: string): string {
@@ -42,6 +43,11 @@ export async function createExam(title: string, subject: string) {
   };
   db.exams.push(newExam);
   await writeDB(db);
+
+  // Revalidate routes to make sure new exam shows up instantly
+  revalidatePath("/exams");
+  revalidatePath("/admin");
+  revalidatePath("/");
   return newExam;
 }
 
@@ -51,6 +57,11 @@ export async function deleteExam(id: string) {
   db.questions = db.questions.filter(q => q.exam_id !== id);
   db.results = db.results.filter(r => r.exam_id !== id);
   await writeDB(db);
+
+  // Revalidate routes to clear caches
+  revalidatePath("/exams");
+  revalidatePath("/admin");
+  revalidatePath("/");
   return { success: true };
 }
 
@@ -71,13 +82,27 @@ export async function saveQuestion(data: any) {
     db.questions.push({ ...data, id: generateId(), created_at: new Date().toISOString() });
   }
   await writeDB(db);
+
+  // Revalidate pages to display updated questions
+  revalidatePath(`/exams/${data.exam_id}`);
+  revalidatePath(`/admin/exams/${data.exam_id}`);
+  revalidatePath("/exams");
   return { success: true };
 }
 
 export async function deleteQuestion(id: string) {
   const db = await readDB();
+  const question = db.questions.find(q => q.id === id);
+  const examId = question ? question.exam_id : null;
+
   db.questions = db.questions.filter(q => q.id !== id);
   await writeDB(db);
+
+  if (examId) {
+    revalidatePath(`/exams/${examId}`);
+    revalidatePath(`/admin/exams/${examId}`);
+    revalidatePath("/exams");
+  }
   return { success: true };
 }
 
@@ -113,6 +138,9 @@ export async function registerUser(name: string, password: string) {
   cookieStore.set("student_id",   userId,       { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
   cookieStore.set("student_name", name.trim(),  { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
 
+  // Revalidate to show new users in admin panel instantly
+  revalidatePath("/admin");
+  revalidatePath("/exams");
   return { success: true, user: { id: userId, name: name.trim() } };
 }
 
@@ -127,6 +155,8 @@ export async function loginUser(name: string, password: string) {
   cookieStore.set("student_id",   user.id,   { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
   cookieStore.set("student_name", user.name, { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
 
+  revalidatePath("/exams");
+  revalidatePath("/admin");
   return { success: true, user: { id: user.id, name: user.name } };
 }
 
@@ -134,6 +164,7 @@ export async function logoutUser() {
   const cookieStore = await cookies();
   cookieStore.delete("student_id");
   cookieStore.delete("student_name");
+  revalidatePath("/exams");
   redirect("/");
 }
 
@@ -162,6 +193,12 @@ export async function saveResult(examId: string, score: number, totalQuestions: 
   };
   db.results.push(newResult);
   await writeDB(db);
+
+  // Revalidate to show new result in leaderboards and admin lists instantly
+  revalidatePath(`/results/${newResult.id}`);
+  revalidatePath(`/exams/${examId}`);
+  revalidatePath(`/admin/exams/${examId}`);
+  revalidatePath("/exams");
   return newResult;
 }
 
@@ -286,6 +323,11 @@ export async function parseQuestionsWithAI(examId: string, rawText: string) {
 
     db.questions.push(...questions);
     await writeDB(db);
+
+    // Revalidate paths for new questions
+    revalidatePath(`/exams/${examId}`);
+    revalidatePath(`/admin/exams/${examId}`);
+    revalidatePath("/exams");
     return { success: true, count: questions.length };
   } catch (error: any) {
     return { success: false, error: "Error: " + (error.message || "Unknown error") };
