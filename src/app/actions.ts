@@ -1,6 +1,6 @@
 "use server";
 
-import { readDB, writeDB, generateId } from "@/lib/db";
+import { dbSelect, dbInsert, dbUpdate, dbDelete, generateId } from "@/lib/db";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -19,32 +19,33 @@ function hashPassword(password: string): string {
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
 }
 
-// --- EXAMS ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXAMS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function getExams() {
-  const db = await readDB();
-  return db.exams.map(exam => {
-    const questionCount = db.questions.filter(q => q.exam_id === exam.id).length;
+  const exams = await dbSelect("exams", "select=*&order=created_at.desc");
+  // Get question counts for each exam
+  const questions = await dbSelect("questions", "select=exam_id");
+
+  return exams.map(exam => {
+    const questionCount = questions.filter(q => q.exam_id === exam.id).length;
     return { ...exam, questions: [{ count: questionCount }] };
-  }).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  });
 }
 
 export async function getExamById(id: string) {
-  const db = await readDB();
-  return db.exams.find(e => e.id === id) || null;
+  const results = await dbSelect("exams", `select=*&id=eq.${id}`);
+  return results.length > 0 ? results[0] : null;
 }
 
 export async function createExam(title: string, subject: string) {
-  const db = await readDB();
-  const newExam = {
+  const newExam = await dbInsert("exams", {
     id: generateId(),
     title,
-    subject,
-    created_at: new Date().toISOString()
-  };
-  db.exams.push(newExam);
-  await writeDB(db);
+    subject
+  });
 
-  // Revalidate routes to make sure new exam shows up instantly
   revalidatePath("/exams");
   revalidatePath("/admin");
   revalidatePath("/");
@@ -52,38 +53,38 @@ export async function createExam(title: string, subject: string) {
 }
 
 export async function deleteExam(id: string) {
-  const db = await readDB();
-  db.exams = db.exams.filter(e => e.id !== id);
-  db.questions = db.questions.filter(q => q.exam_id !== id);
-  db.results = db.results.filter(r => r.exam_id !== id);
-  await writeDB(db);
+  // Delete related questions and results first
+  await dbDelete("questions", `exam_id=eq.${id}`);
+  await dbDelete("results", `exam_id=eq.${id}`);
+  await dbDelete("exams", `id=eq.${id}`);
 
-  // Revalidate routes to clear caches
   revalidatePath("/exams");
   revalidatePath("/admin");
   revalidatePath("/");
   return { success: true };
 }
 
-// --- QUESTIONS ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// QUESTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function getQuestionsByExamId(examId: string) {
-  const db = await readDB();
-  return db.questions
-    .filter(q => q.exam_id === examId)
-    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  return await dbSelect("questions", `select=*&exam_id=eq.${examId}&order=created_at.asc`);
 }
 
 export async function saveQuestion(data: any) {
-  const db = await readDB();
   if (data.id) {
-    const index = db.questions.findIndex(q => q.id === data.id);
-    if (index !== -1) db.questions[index] = { ...db.questions[index], ...data };
+    // Update existing question
+    const { id, ...updateData } = data;
+    await dbUpdate("questions", `id=eq.${id}`, updateData);
   } else {
-    db.questions.push({ ...data, id: generateId(), created_at: new Date().toISOString() });
+    // Insert new question
+    await dbInsert("questions", {
+      ...data,
+      id: generateId()
+    });
   }
-  await writeDB(db);
 
-  // Revalidate pages to display updated questions
   revalidatePath(`/exams/${data.exam_id}`);
   revalidatePath(`/admin/exams/${data.exam_id}`);
   revalidatePath("/exams");
@@ -91,12 +92,11 @@ export async function saveQuestion(data: any) {
 }
 
 export async function deleteQuestion(id: string) {
-  const db = await readDB();
-  const question = db.questions.find(q => q.id === id);
-  const examId = question ? question.exam_id : null;
+  // Get question to know exam_id for revalidation
+  const questions = await dbSelect("questions", `select=exam_id&id=eq.${id}`);
+  const examId = questions.length > 0 ? questions[0].exam_id : null;
 
-  db.questions = db.questions.filter(q => q.id !== id);
-  await writeDB(db);
+  await dbDelete("questions", `id=eq.${id}`);
 
   if (examId) {
     revalidatePath(`/exams/${examId}`);
@@ -106,53 +106,48 @@ export async function deleteQuestion(id: string) {
   return { success: true };
 }
 
-// --- USERS AUTH ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// USERS AUTH
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function getUsers() {
-  const db = await readDB();
-  return db.users
-    .map(u => ({ id: u.id, name: u.name, created_at: u.created_at }))
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const users = await dbSelect("users", "select=id,name,created_at&order=created_at.desc");
+  return users;
 }
 
 export async function registerUser(name: string, password: string) {
-  const db = await readDB();
-  db.users = db.users || [];
-
-  // Check if name already exists
-  const existing = db.users.find(u => u.name.toLowerCase().trim() === name.toLowerCase().trim());
-  if (existing) {
+  // Check if name already exists (case-insensitive)
+  const existing = await dbSelect("users", `select=id&name=ilike.${encodeURIComponent(name.trim())}`);
+  if (existing.length > 0) {
     return { success: false, error: "nameExists" };
   }
 
   const userId = generateId();
-  const newUser = {
+  await dbInsert("users", {
     id: userId,
     name: name.trim(),
-    password: hashPassword(password),
-    created_at: new Date().toISOString()
-  };
-  db.users.push(newUser);
-  await writeDB(db);
+    password: hashPassword(password)
+  });
 
   const cookieStore = await cookies();
-  cookieStore.set("student_id",   userId,       { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
-  cookieStore.set("student_name", name.trim(),  { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
+  cookieStore.set("student_id", userId, { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
+  cookieStore.set("student_name", name.trim(), { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
 
-  // Revalidate to show new users in admin panel instantly
   revalidatePath("/admin");
   revalidatePath("/exams");
   return { success: true, user: { id: userId, name: name.trim() } };
 }
 
 export async function loginUser(name: string, password: string) {
-  const db = await readDB();
-  const user = db.users.find(u => u.name.toLowerCase().trim() === name.toLowerCase().trim());
+  const users = await dbSelect("users", `select=*&name=ilike.${encodeURIComponent(name.trim())}`);
 
-  if (!user) return { success: false, error: "notFound" };
+  if (users.length === 0) return { success: false, error: "notFound" };
+
+  const user = users[0];
   if (user.password !== hashPassword(password)) return { success: false, error: "wrongPassword" };
 
   const cookieStore = await cookies();
-  cookieStore.set("student_id",   user.id,   { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
+  cookieStore.set("student_id", user.id, { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
   cookieStore.set("student_name", user.name, { httpOnly: true, secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365 });
 
   revalidatePath("/exams");
@@ -170,47 +165,44 @@ export async function logoutUser() {
 
 export async function getCurrentUser() {
   const cookieStore = await cookies();
-  const id   = cookieStore.get("student_id")?.value;
+  const id = cookieStore.get("student_id")?.value;
   const name = cookieStore.get("student_name")?.value;
   if (id && name) return { id, name };
   return null;
 }
 
-// --- RESULTS ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESULTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function saveResult(examId: string, score: number, totalQuestions: number, percentage: number) {
-  const db = await readDB();
   const user = await getCurrentUser();
 
-  const newResult = {
+  const newResult = await dbInsert("results", {
     id: generateId(),
     exam_id: examId,
-    user_id:   user ? user.id   : "anonymous",
+    user_id: user ? user.id : "anonymous",
     user_name: user ? user.name : "مجهول",
     score,
     total_questions: totalQuestions,
-    percentage,
-    created_at: new Date().toISOString()
-  };
-  db.results.push(newResult);
-  await writeDB(db);
+    percentage
+  });
 
-  // Revalidate to show new result in leaderboards and admin lists instantly
-  revalidatePath(`/results/${newResult.id}`);
+  revalidatePath(`/results/${newResult?.id}`);
   revalidatePath(`/exams/${examId}`);
-  revalidatePath(`/admin/exams/${examId}`);
   revalidatePath("/exams");
   return newResult;
 }
 
 export async function getResultById(id: string) {
-  const db = await readDB();
-  return db.results.find(r => r.id === id) || null;
+  const results = await dbSelect("results", `select=*&id=eq.${id}`);
+  return results.length > 0 ? results[0] : null;
 }
 
 export async function getLeaderboard(examId: string) {
-  const db = await readDB();
-  const results = db.results.filter(r => r.exam_id === examId);
+  const results = await dbSelect("results", `select=*&exam_id=eq.${examId}&order=percentage.desc,created_at.asc`);
 
+  // Keep only highest score per user
   const highestScores = new Map<string, any>();
   results.forEach(r => {
     const key = r.user_id || r.user_name;
@@ -219,19 +211,17 @@ export async function getLeaderboard(examId: string) {
     }
   });
 
-  return Array.from(highestScores.values())
-    .sort((a, b) => b.percentage - a.percentage || new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
-    .slice(0, 20);
+  return Array.from(highestScores.values()).slice(0, 20);
 }
 
 export async function getAllResults(examId: string) {
-  const db = await readDB();
-  return db.results
-    .filter(r => r.exam_id === examId)
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return await dbSelect("results", `select=*&exam_id=eq.${examId}&order=created_at.desc`);
 }
 
-// --- ADMIN AUTH ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN AUTH
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function adminLogin(password: string) {
   if (password === "ECU482007") {
     const cookieStore = await cookies();
@@ -252,11 +242,13 @@ export async function checkAdminSession() {
   return cookieStore.get("admin_session")?.value === "true";
 }
 
-// --- SMART IMPORT ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMART IMPORT (AI Question Parser)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 export async function parseQuestionsWithAI(examId: string, rawText: string) {
   try {
-    const db = await readDB();
-    const questions = [];
+    const questions: any[] = [];
 
     const blocks = rawText.split(/(?:^|\n)(?:Q(?:uestion)?\s*)?\d+[\.\:\)\-]\s*/i).filter(b => b.trim().length > 10);
 
@@ -291,7 +283,7 @@ export async function parseQuestionsWithAI(examId: string, rawText: string) {
           exam_id: examId, id: generateId(), type: "tf",
           question: questionText, option_a: "True / صح", option_b: "False / خطأ",
           option_c: "", option_d: "", correct_answer: correctAnswer,
-          explanation, created_at: new Date().toISOString()
+          explanation
         });
       } else {
         const options: Record<string, string> = { A: "", B: "", C: "", D: "" };
@@ -314,17 +306,18 @@ export async function parseQuestionsWithAI(examId: string, rawText: string) {
           question: questionText, option_a: options.A || "Option A",
           option_b: options.B || "Option B", option_c: options.C || "",
           option_d: options.D || "", correct_answer: correctAnswer,
-          explanation, created_at: new Date().toISOString()
+          explanation
         });
       }
     }
 
     if (questions.length === 0) return { success: false, error: "فشل استخراج الأسئلة." };
 
-    db.questions.push(...questions);
-    await writeDB(db);
+    // Insert all questions into Supabase
+    for (const q of questions) {
+      await dbInsert("questions", q);
+    }
 
-    // Revalidate paths for new questions
     revalidatePath(`/exams/${examId}`);
     revalidatePath(`/admin/exams/${examId}`);
     revalidatePath("/exams");
